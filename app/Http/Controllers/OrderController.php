@@ -31,7 +31,7 @@ class OrderController extends Controller
         $data = $order->toArray();
 
         // Consume UserService — enrich data user
-        $userResponse = Http::get(env('USER_SERVICE_URL') . '/api/users/' . $order->user_id);
+        $userResponse = Http::get(env('USER_SERVICE_URL') . '/api/students/' . $order->user_id);
         $data['user'] = $userResponse->successful() ? $userResponse->json()['data'] : null;
 
         // Consume ProductService — enrich data tiap item
@@ -78,7 +78,7 @@ class OrderController extends Controller
         }
 
         // Consume UserService — validasi user ada
-        $userResponse = Http::get(env('USER_SERVICE_URL') . '/api/users/' . $request->user_id);
+        $userResponse = Http::get(env('USER_SERVICE_URL') . '/api/students/' . $request->user_id);
 
         if ($userResponse->failed()) {
             return new OrderResource('Failed', 'User tidak ditemukan', null);

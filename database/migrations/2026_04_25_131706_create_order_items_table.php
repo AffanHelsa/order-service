@@ -10,13 +10,19 @@ return new class extends Migration
      * Run the migrations.
      */
     public function up(): void
-    {
-        Schema::create('order_items', function (Blueprint $table) {
-            $table->id();
-            $table->timestamps();
-        });
-    }
-
+{
+    Schema::create('order_items', function (Blueprint $table) {
+        $table->id();
+        $table->foreignId('order_id')->constrained()->cascadeOnDelete();
+        $table->uuid('product_id');
+        $table->string('product_name');
+        $table->decimal('price', 10, 2);
+        $table->integer('quantity');
+        $table->decimal('subtotal', 12, 2);
+        $table->softDeletes();
+        $table->timestamps();
+    });
+}
     /**
      * Reverse the migrations.
      */

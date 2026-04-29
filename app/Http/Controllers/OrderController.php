@@ -14,14 +14,14 @@ class OrderController extends Controller
 {
     // GET /api/orders
     public function index()
-{
-    $orders = Order::with('items')->latest()->get();
-    $orders->each(function ($order) {
-        $order->makeHidden(['deleted_at']);
-        $order->items->each->makeHidden(['deleted_at']);
-    });
-    return new OrderResource('Success', 'List of orders', $orders);
-}
+    {
+        $orders = Order::with('items')->latest()->get();
+        $orders->each(function ($order) {
+            $order->makeHidden(['deleted_at']);
+            $order->items->each->makeHidden(['deleted_at']);
+        });
+        return new OrderResource('Success', 'List of orders', $orders);
+    }
 
     // GET /api/orders/{id}
     public function show($id)
@@ -70,11 +70,11 @@ class OrderController extends Controller
     public function store(Request $request)
     {
         $validator = Validator::make($request->all(), [
-            'user_id'            => 'required|integer',
-            'items'              => 'required|array|min:1',
+            'user_id' => 'required|integer',
+            'items' => 'required|array|min:1',
             'items.*.product_id' => 'required|integer',
-            'items.*.quantity'   => 'required|integer|min:1',
-            'notes'              => 'nullable|string',
+            'items.*.quantity' => 'required|integer|min:1',
+            'notes' => 'nullable|string',
         ]);
 
         if ($validator->fails()) {
@@ -82,13 +82,13 @@ class OrderController extends Controller
         }
 
         // Consume UserService — validasi user ada
-        $userResponse = Http::get(env('USER_SERVICE_URL') . '/api/users/' . $request->user_id);
+         $userResponse = Http::get(env('USER_SERVICE_URL') . '/api/users/' . $request->user_id);
+        $userData     = $userResponse->json();
 
-        if ($userResponse->failed()) {
-            return new OrderResource('Failed', 'User tidak ditemukan', null);
-        }
-
-        $items      = [];
+          if ($userResponse->failed() || strtolower($userData['status'] ?? '') !== 'success') {
+        return new OrderResource('Failed', 'User tidak ditemukan', null);
+    }
+        $items = [];
         $totalPrice = 0;
 
         foreach ($request->items as $item) {
@@ -100,42 +100,93 @@ class OrderController extends Controller
 
             $product = $productResponse->json('data');
 
-            if ($product['stock'] < $item['quantity']) {
-                return new OrderResource('Failed', 'Stok produk ' . $product['name'] . ' tidak mencukupi', null);
-            }
+             if (!$product) {
+            return new OrderResource('Failed', 'Produk dengan ID ' . $item['product_id'] . ' tidak ditemukan', null);
+        }
 
-            $subtotal    = $product['price'] * $item['quantity'];
-            $totalPrice += $subtotal;
+        // Diperbaiki — $item['quantity'] bukan $item['stock']
+        if ($product['stock'] < $item['quantity']) {
+            return new OrderResource('Failed', 'Stok produk ' . $product['name'] . ' tidak mencukupi', null);
+        }
+
+        $subtotal    = (float)$product['price'] * $item['quantity'];
+        $totalPrice += $subtotal;
+
+            // $subtotal = $product['price'] * $item['quantity'];
+            // $totalPrice += $subtotal;
 
             $items[] = [
-                'product_id'   => $product['id'],
+                'product_id' => $product['id'],
                 'product_name' => $product['name'],
-                'price'        => $product['price'],
-                'quantity'     => $item['quantity'],
-                'subtotal'     => $subtotal,
+                'price' => $product['price'],
+                'quantity' => $item['quantity'],
+                'subtotal' => $subtotal,
             ];
         }
 
         DB::beginTransaction();
+
         try {
             $order = Order::create([
-                'user_id'     => $request->user_id,
-                'status'      => 'pending',
+                'user_id' => $request->user_id,
+                'status' => 'pending',
                 'total_price' => $totalPrice,
-                'notes'       => $request->notes,
+                'notes' => $request->notes,
             ]);
 
             foreach ($items as $item) {
                 $order->items()->create($item);
+
+                $decreaseStockResponse = Http::put(
+                    env('PRODUCT_SERVICE_URL') . '/api/products/' . $item['product_id'] . '/decrease-stock',
+                    [
+                        'quantity' => $item['quantity']
+                    ]
+                );
+
+
+                if ($decreaseStockResponse->failed()) {
+                    throw new \Exception(
+                        'Gagal mengurangi stok produk ID ' . $item['product_id'] .
+                        ' | Status: ' . $decreaseStockResponse->status() .
+                        ' | Body: ' . $decreaseStockResponse->body()
+                    );
+                }
             }
 
             DB::commit();
+
+            return new OrderResource(
+                'Success',
+                'Order berhasil dibuat',
+                $order->load('items')
+            );
+
         } catch (\Exception $e) {
             DB::rollBack();
             return new OrderResource('Failed', 'Gagal membuat order: ' . $e->getMessage(), null);
         }
 
-        return new OrderResource('Success', 'Order created successfully', $order->load('items'));
+        // DB::beginTransaction();
+        // try {
+        //     $order = Order::create([
+        //         'user_id'     => $request->user_id,
+        //         'status'      => 'pending',
+        //         'total_price' => $totalPrice,
+        //         'notes'       => $request->notes,
+        //     ]);
+
+        //     foreach ($items as $item) {
+        //         $order->items()->create($item);
+        //     }
+
+        //     DB::commit();
+        // } catch (\Exception $e) {
+        //     DB::rollBack();
+        //     return new OrderResource('Failed', 'Gagal membuat order: ' . $e->getMessage(), null);
+        // }
+
+        // return new OrderResource('Success', 'Order created successfully', $order->load('items'));
     }
 
     // PUT /api/orders/{id}/status
@@ -160,84 +211,84 @@ class OrderController extends Controller
         return new OrderResource('Success', 'Status order berhasil diupdate', $order);
     }
     public function updateQuantity(Request $request, $orderId, $itemId)
-{
-    $validator = Validator::make($request->all(), [
-        'quantity' => 'required|integer|min:1',
-    ]);
-
-    if ($validator->fails()) {
-        return new OrderResource('Failed', 'Validation error', $validator->errors());
-    }
-
-    // Cek order ada
-    $order = Order::find($orderId);
-    if (!$order) {
-        return new OrderResource('Failed', 'Order not found', null);
-    }
-
-    // Cek status order masih pending
-    if ($order->status !== 'pending') {
-        return new OrderResource('Failed', 'Order tidak dapat diubah karena status bukan pending', null);
-    }
-
-    // Cek item ada dan milik order ini
-    $item = OrderItem::where('id', $itemId)
-        ->where('order_id', $orderId)
-        ->first();
-
-    if (!$item) {
-        return new OrderResource('Failed', 'Item tidak ditemukan', null);
-    }
-
-    // Consume ProductService — cek stok mencukupi
-    $productResponse = Http::get(env('PRODUCT_SERVICE_URL') . '/api/products/' . $item->product_id);
-
-    if ($productResponse->failed()) {
-        return new OrderResource('Failed', 'Produk tidak ditemukan', null);
-    }
-
-    $product      = $productResponse->json('data');
-    $newQuantity  = $request->quantity;
-    $oldQuantity  = $item->quantity;
-    $selisih      = $newQuantity - $oldQuantity;
-
-    // Cek stok mencukupi jika quantity bertambah
-    if ($selisih > 0 && $product['stock'] < $selisih) {
-        return new OrderResource('Failed', 'Stok produk tidak mencukupi', null);
-    }
-
-    DB::beginTransaction();
-    try {
-        // Hitung ulang subtotal item
-        $newSubtotal = $item->price * $newQuantity;
-        $item->update([
-            'quantity' => $newQuantity,
-            'subtotal' => $newSubtotal,
+    {
+        $validator = Validator::make($request->all(), [
+            'quantity' => 'required|integer|min:1',
         ]);
 
-        // Hitung ulang total_price order
-        $newTotalPrice = $order->items()->sum('subtotal');
-        $order->update(['total_price' => $newTotalPrice]);
+        if ($validator->fails()) {
+            return new OrderResource('Failed', 'Validation error', $validator->errors());
+        }
 
-        DB::commit();
-    } catch (\Exception $e) {
-        DB::rollBack();
-        return new OrderResource('Failed', 'Gagal update quantity: ' . $e->getMessage(), null);
+        // Cek order ada
+        $order = Order::find($orderId);
+        if (!$order) {
+            return new OrderResource('Failed', 'Order not found', null);
+        }
+
+        // Cek status order masih pending
+        if ($order->status !== 'pending') {
+            return new OrderResource('Failed', 'Order tidak dapat diubah karena status bukan pending', null);
+        }
+
+        // Cek item ada dan milik order ini
+        $item = OrderItem::where('id', $itemId)
+            ->where('order_id', $orderId)
+            ->first();
+
+        if (!$item) {
+            return new OrderResource('Failed', 'Item tidak ditemukan', null);
+        }
+
+        // Consume ProductService — cek stok mencukupi
+        $productResponse = Http::get(env('PRODUCT_SERVICE_URL') . '/api/products/' . $item->product_id);
+
+        if ($productResponse->failed()) {
+            return new OrderResource('Failed', 'Produk tidak ditemukan', null);
+        }
+
+        $product = $productResponse->json('data');
+        $newQuantity = $request->quantity;
+        $oldQuantity = $item->quantity;
+        $selisih = $newQuantity - $oldQuantity;
+
+        // Cek stok mencukupi jika quantity bertambah
+        if ($selisih > 0 && $product['stock'] < $selisih) {
+            return new OrderResource('Failed', 'Stok produk tidak mencukupi', null);
+        }
+
+        DB::beginTransaction();
+        try {
+            // Hitung ulang subtotal item
+            $newSubtotal = $item->price * $newQuantity;
+            $item->update([
+                'quantity' => $newQuantity,
+                'subtotal' => $newSubtotal,
+            ]);
+
+            // Hitung ulang total_price order
+            $newTotalPrice = $order->items()->sum('subtotal');
+            $order->update(['total_price' => $newTotalPrice]);
+
+            DB::commit();
+        } catch (\Exception $e) {
+            DB::rollBack();
+            return new OrderResource('Failed', 'Gagal update quantity: ' . $e->getMessage(), null);
+        }
+
+        return new OrderResource('Success', 'Quantity berhasil diupdate', $order->load('items'));
     }
-
-    return new OrderResource('Success', 'Quantity berhasil diupdate', $order->load('items'));
-}
     public function destroy($id)
-{
-    $order = Order::with('items')->find($id);
+    {
+        $order = Order::with('items')->find($id);
 
-    if (!$order) {
-        return new OrderResource('Failed', 'Order not found', null);
+        if (!$order) {
+            return new OrderResource('Failed', 'Order not found', null);
+        }
+
+        $order->items()->delete();
+        $order->delete();
+
+        return new OrderResource('Success', 'Order berhasil dihapus', null);
     }
-
-    $order->items()->delete();
-    $order->delete();
-
-    return new OrderResource('Success', 'Order berhasil dihapus', null);
-}
 }

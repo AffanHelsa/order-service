@@ -14,10 +14,14 @@ class OrderController extends Controller
 {
     // GET /api/orders
     public function index()
-    {
-        $orders = Order::with('items')->latest()->get();
-        return new OrderResource('Success', 'List of orders', $orders);
-    }
+{
+    $orders = Order::with('items')->latest()->get();
+    $orders->each(function ($order) {
+        $order->makeHidden(['deleted_at']);
+        $order->items->each->makeHidden(['deleted_at']);
+    });
+    return new OrderResource('Success', 'List of orders', $orders);
+}
 
     // GET /api/orders/{id}
     public function show($id)
@@ -155,4 +159,17 @@ class OrderController extends Controller
 
         return new OrderResource('Success', 'Status order berhasil diupdate', $order);
     }
+    public function destroy($id)
+{
+    $order = Order::with('items')->find($id);
+
+    if (!$order) {
+        return new OrderResource('Failed', 'Order not found', null);
+    }
+
+    $order->items()->delete();
+    $order->delete();
+
+    return new OrderResource('Success', 'Order berhasil dihapus', null);
+}
 }

@@ -11,7 +11,7 @@ class OrderResource extends JsonResource
     public $message;
     public $resource;
 
-    public function __construct($resource, $status, $message)
+    public function __construct($status, $message, $resource)
     {
         $this->status  = $status;
         $this->message = $message;
